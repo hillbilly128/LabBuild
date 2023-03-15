@@ -1,0 +1,12 @@
+#!/bin/sh
+
+sleep 10
+
+ipaddress=$(ip a show dev ens4 | grep -oP 'inet \K[^ ]+')
+
+if [ $ipaddress ];
+then
+    systemctl disable {{ rebootServiceName }}
+else
+    reboot now
+fi

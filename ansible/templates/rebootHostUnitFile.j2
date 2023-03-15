@@ -1,0 +1,9 @@
+[Unit]
+Description=Reboot message systemd service.
+
+[Service]
+Type=simple
+ExecStart=/bin/bash {{ rebootServicepath }}
+
+[Install]
+WantedBy=multi-user.target

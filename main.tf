@@ -20,6 +20,10 @@ terraform {
       source  = "hashicorp/null"
       version = "3.2.1"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "4.0.4"
+    }
   }
 }
 
@@ -35,6 +39,17 @@ provider "libvirt" {
   uri = "qemu:///system"
 }
 
+resource "tls_private_key" "dev_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "local_sensitive_file" "ssh-private-key" {
+  filename        = "${abspath(path.root)}/.ssh/dev_rsa"
+  file_permission = 0400
+  content         = tls_private_key.dev_key.private_key_openssh
+}
+
 data "bitwarden_item_login" "proxmox-host-credentials" {
   id = "b0243597-acea-4f1f-8827-afa301543ae8"
 }
@@ -43,23 +58,15 @@ data "bitwarden_item_login" "admin-root-credentials" {
   id = "7523cbb5-6184-46df-9069-afa301546588"
 }
 
-data "local_file" "private_key" {
-  filename = "/home/craig/.ssh/id_rsa"
-}
-
-data "local_file" "public_key" {
-  filename = "/home/craig/.ssh/id_rsa.pub"
-}
-
 variable "host-quantity" {
   type        = number
   description = "Number of hosts required"
 }
 
 variable "domain-name" {
-  type = string
+  type        = string
   description = "Domain Name for the Hosts"
-  default = "test.local"
+  default     = "test.local"
 }
 
 resource "random_integer" "rng" {
@@ -90,6 +97,8 @@ resource "libvirt_pool" "debian10Pool" {
   name = "debian10-pool"
   type = "dir"
   path = "/mnt/store/Library/DiskImage/templates/"
+
+
 }
 
 #Build a blank thin provisioned HDD 
@@ -97,7 +106,7 @@ resource "libvirt_volume" "data" {
   count = var.host-quantity
   name  = "Host-data-${count.index}.qcow2"
   pool  = libvirt_pool.debian10Pool.name
-  size  = 500000000000
+  size  = 536870912000
 
   depends_on = [
     libvirt_pool.debian10Pool
@@ -122,6 +131,7 @@ resource "libvirt_volume" "host_root_disk" {
   name           = "host_root_${count.index}.qcow2"
   pool           = libvirt_pool.debian10Pool.name
   base_volume_id = libvirt_volume.debian10image.id
+  size           = 12884901888
 
   depends_on = [
     libvirt_volume.debian10image
@@ -140,30 +150,35 @@ data "template_file" "user_data" {
   template = <<-EOL
   #cloud-config
 
-  manage_etc_hosts: true
+  manage_etc_hosts: false
 
   timezone: Europe/London
+
+  runcmd:
+    - 'wget https://enterprise.proxmox.com/debian/proxmox-release-bullseye.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bullseye.gpg'
 
   ntp:
     enabled: true
     ntp_client: chrony
-    pool: [pool.ntp.org]
+    pools: [0.uk.pool.ntp.org,1.uk.pool.ntp.org,2.uk.pool.ntp.org,4.uk.pool.ntp.org]
 
   apt:
-    conf: |
-      APT {
-          Get {
-              Assume-Yes 'true';
-              Fix-Broken 'true';
-          }
-      }
-    sources:
-      proxmox:
-        source: 'deb http://download.proxmox.com/debian/pve bullseye pve-no-subscription'
+    security:
+    - arches: default
+      uri: http://security.debian.org/debian-security
+  
+    
+    sources_list: |
+      deb $MIRROR $RELEASE main contrib
+      deb-src $MIRROR $RELEASE main contrib
+      deb $SECURITY $RELEASE-security main contrib non-free
 
   fqdn: ${local.hostnames[count.index]}
-  hostname: ${trim( local.hostnames[count.index], var.domain-name)}
+  hostname: ${trim(local.hostnames[count.index], var.domain-name)}
   prefer_fqdn_over_hostname: true
+
+  keyboard:
+    layout: gb
 
   users:
   - name: ${data.bitwarden_item_login.admin-root-credentials.username}
@@ -171,7 +186,7 @@ data "template_file" "user_data" {
     shell: /bin/bash
     lock_passwd: false
     ssh_authorized_keys: 
-    - ${chomp(data.local_file.public_key.content)}
+    - ${trimspace(tls_private_key.dev_key.public_key_openssh)}
     sudo: ALL=(ALL) NOPASSWD:ALL
   EOL
 
@@ -183,7 +198,7 @@ data "template_file" "user_data" {
 #Network file for each host
 data "template_file" "network_config" {
   count    = var.host-quantity
-  template = yamlencode({ "network" : { "version" : 2, "ethernets" : { "id0" : { "dhcp4" : true, "match" : { "macaddress" : local.random_mac[count.index] } }, "id1" : { "addressess" : ["172.16.10.${10 + count.index}/24"], "mtu" : 9000, "match" : { "macaddress" : local.random_mac_cluster[count.index] } } } } })
+  template = yamlencode({ "network" : { "version" : 2, "ethernets" : { "eth0" : { "dhcp4" : true, "match" : { "macaddress" : local.random_mac[count.index] } }, "eth1" : { "addressess" : ["172.16.10.${10 + count.index}/24"], "mtu" : 9000, "match" : { "macaddress" : local.random_mac_cluster[count.index] } } } } })
 }
 
 data "libvirt_network_dns_host_template" "hosts" {
@@ -223,8 +238,8 @@ resource "libvirt_cloudinit_disk" "commoninit" {
 resource "libvirt_domain" "host" {
   count    = var.host-quantity
   name     = local.hostnames[count.index]
-  memory   = "1024"
-  vcpu     = 1
+  memory   = "2048"
+  vcpu     = 2
   emulator = "/usr/bin/qemu-system-x86_64"
   machine  = "pc-i440fx-6.2"
   arch     = "x86_64"
@@ -243,7 +258,7 @@ resource "libvirt_domain" "host" {
     wait_for_lease = true
   }
 
-  #internet network interface using default NAT'd network
+  #privtae network interface using generated network
   network_interface {
     network_id = libvirt_network.network_cluster.id
     hostname   = local.hostnames[count.index]
@@ -295,18 +310,20 @@ resource "libvirt_domain" "host" {
     type        = "ssh"
     host        = "172.16.10.${10 + count.index}"
     user        = data.bitwarden_item_login.admin-root-credentials.username
-    private_key = trimspace(data.local_file.private_key.content)
+    private_key = tls_private_key.dev_key.private_key_openssh
     timeout     = "2m"
     agent       = false
   }
 
   provisioner "remote-exec" {
     inline = [
-      "sudo apt update && apt-get dist-upgrade",
-      "sudo apt install proxmox-ve ifupdown2",
-      "sudo apt remove os-prober",
-      "sudo reboot now"
+      "echo 172.16.10.${10 + count.index}\t${local.hostnames[count.index]}\t${trim(local.hostnames[count.index], var.domain-name)} | sudo tee -a /etc/hosts"
     ]
+  }
+
+  provisioner "local-exec" {
+    working_dir = "./ansible/"
+    command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -vvvv -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -i 172.16.10.${10 + count.index}, -e 'clusteripaddress=172.16.10.${10 + count.index} bw_user=${data.bitwarden_item_login.admin-root-credentials.username}' buildProxmox.yaml"
   }
 
   depends_on = [
