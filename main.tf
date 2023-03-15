@@ -177,6 +177,9 @@ data "template_file" "user_data" {
   hostname: ${trim(local.hostnames[count.index], var.domain-name)}
   prefer_fqdn_over_hostname: true
 
+  keyboard:
+    layout: gb
+
   users:
   - name: ${data.bitwarden_item_login.admin-root-credentials.username}
     plain_text_passwd: ${data.bitwarden_item_login.admin-root-credentials.password}
@@ -320,7 +323,7 @@ resource "libvirt_domain" "host" {
 
   provisioner "local-exec" {
     working_dir = "./ansible/"
-    command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -vvvv -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -i 172.16.10.${10 + count.index}, buildProxmox.yaml"
+    command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -vvvv -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -i 172.16.10.${10 + count.index}, -e 'clusteripaddress=172.16.10.${10 + count.index} bw_user=${data.bitwarden_item_login.admin-root-credentials.username}' buildProxmox.yaml"
   }
 
   depends_on = [

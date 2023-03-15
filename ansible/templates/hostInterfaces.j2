@@ -1,0 +1,16 @@
+auto lo
+
+iface lo inet loopback
+
+iface ens3 inet manual
+
+auto vmbr0
+iface vmbr0 inet dhcp    
+    bridge-ports ens3
+    bridge-stp off
+    bridge-fd 0
+
+iface ens4 inet static
+    address {{ clusteripaddress }}
+    netmask 255.255.255.0
+    mtu 9000

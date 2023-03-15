@@ -1,6 +1,11 @@
 ---
 - hosts: all
   become: yes
+  vars:
+    rebootServiceName: OneOffReboot
+    rebootServicepath: /usr/local/rebootscript.sh
+    rebootServiceUnitFile: "/etc/systemd/system/{{ rebootServiceName }}.service"
+
   tasks:
   - name: Add Proxmox repository into sources list
     ansible.builtin.apt_repository:
@@ -24,13 +29,88 @@
       state: present
       pkg:
       - proxmox-ve
+      - ifupdown2
     
 
   - name: Remove OS-prober
     ansible.builtin.apt:
       state: absent
-      name: os-prober
+      pkg: 
+      - os-prober
+      - ifupdown
+  
+  - name: copy new interfaces file
+    ansible.builtin.template:
+      src: hostInterfaces.j2
+      dest: /etc/network/interfaces.new
+      mode: 0644
+      owner: root
+      group: root
+
+  - name: copy reboot script
+    ansible.builtin.template:
+      src: rebootHostScript.j2
+      dest: "{{ rebootServicepath }}"
+      mode: 0644
+      owner: root
+      group: root
+  
+  - name: copy reboot unit file
+    ansible.builtin.template:
+      src: rebootHostUnitFile.j2
+      dest: "{{ rebootServiceUnitFile }}"
+      mode: 0644
+      owner: root
+      group: root
+
+  - name: Enable reboot service
+    ansible.builtin.systemd:
+      daemon_reload: true
+      enabled: true
+      name: "{{ rebootServiceName }}"
+    
+  - name: disable cloud-init configured interfaces to prevent conficts with ifupdown2
+    ansible.builtin.systemd:
+      enabled: false
+      name: "{{ item }}"
+    with_list:
+      - ifup@ens3.service
+      - ifup@ens4.service
       
+  - name: disable cloud-init
+    ansible.builtin.systemd:
+      enabled: false
+      state: stopped
+      name: "{{ item }}"
+    with_list:
+      - cloud-init.service
+      - cloud-init-local.service
+      - cloud-config.service
+      - cloud-final.service
+      - cloud-init.target
+    
   - name: Reboot host into proxmox
     ansible.builtin.reboot:
-      
+
+  - name: remove reboot script
+    ansible.builtin.file:
+      path: "{{ rebootServicepath }}"
+      state: absent
+    
+  - name: remove reboot unit file
+    ansible.builtin.file:
+      path: "{{ rebootServiceUnitFile }}"
+      state: absent
+  
+  - name: Reload Systemd
+    ansible.builtin.systemd:
+      daemon_reload: true
+
+  - name: Add Proxmox Admin User
+    ansible.builtin.shell:
+      cmd: "{{ item }}"
+    loop:
+      - "pveum user add {{bw_user}}@pam"
+      - "pveum group add AdminGroup -comment 'System Administrators'"
+      - "pveum acl modify / -group AdminGroup -role Administrator"
+      - "pveum user modify {{bw_user}}@pam -group AdminGroup"
