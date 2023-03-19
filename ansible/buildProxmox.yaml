@@ -114,3 +114,57 @@
       - "pveum group add AdminGroup -comment 'System Administrators'"
       - "pveum acl modify / -group AdminGroup -role Administrator"
       - "pveum user modify {{bw_user}}@pam -group AdminGroup"
+  
+  - name: Install disk tools
+    ansible.builtin.apt:
+      state: present
+      pkg:
+      - parted
+      - btrfs-progs
+  
+  - name: Create data partition
+    community.general.parted:
+      device: /dev/sdb
+      number: 1
+      state: present
+      fs_type: btrfs
+  
+  - name: format data partition
+    community.general.filesystem:
+      dev: /dev/sdb1
+      fstype: btrfs
+      state: present
+  
+  - name: mount partition to data
+    ansible.posix.mount:
+      path: /data
+      src: /dev/sdb1
+      fstype: btrfs
+      state: mounted
+      opts: defaults,compress=zstd
+  
+  - name: Set data drive label
+    ansible.builtin.shell:
+      cmd: btrfs filesystem label /data DataDrive
+
+  - name: Create directory structure using btrfs subvolumes
+    ansible.builtin.shell:
+      cmd: "btrfs subvolume create {{ item }}"
+    with_list:
+      - /data/templates
+      - /data/iso
+      - /data/lxc
+      - /data/vhd
+      - /data/snippets
+      - /data/backup
+    
+  - name: Add folders to Proxmox
+    ansible.builtin.shell:
+      cmd: "pvesm add btrfs {{ item.contenttype }} --content {{ item.contenttype }} --path {{ item.path }} --is_mountpoint /data"
+    loop:
+      - { path: '/data/templates',contenttype: 'vztmpl' }
+      - { path: '/data/iso',contenttype: 'iso' }
+      - { path: '/data/lxc',contenttype: 'rootdir' }
+      - { path: '/data/vhd',contenttype: 'images' }
+      - { path: '/data/snippets',contenttype: 'snippets' }
+      - { path: '/data/backup',contenttype: 'backup' }
