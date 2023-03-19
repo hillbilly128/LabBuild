@@ -97,8 +97,6 @@ resource "libvirt_pool" "debian10Pool" {
   name = "debian10-pool"
   type = "dir"
   path = "/mnt/store/Library/DiskImage/templates/"
-
-
 }
 
 #Build a blank thin provisioned HDD 
@@ -107,10 +105,6 @@ resource "libvirt_volume" "data" {
   name  = "Host-data-${count.index}.qcow2"
   pool  = libvirt_pool.debian10Pool.name
   size  = 536870912000
-
-  depends_on = [
-    libvirt_pool.debian10Pool
-  ]
 }
 
 #Fetch the current Debian 10 cloud init image
@@ -119,10 +113,6 @@ resource "libvirt_volume" "debian10image" {
   pool   = libvirt_pool.debian10Pool.name
   source = "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.qcow2"
   format = "qcow2"
-
-  depends_on = [
-    libvirt_pool.debian10Pool
-  ]
 }
 
 #Clone the Debian 11 image for each host
@@ -132,10 +122,6 @@ resource "libvirt_volume" "host_root_disk" {
   pool           = libvirt_pool.debian10Pool.name
   base_volume_id = libvirt_volume.debian10image.id
   size           = 12884901888
-
-  depends_on = [
-    libvirt_volume.debian10image
-  ]
 }
 
 #Meta data for each host
@@ -153,6 +139,9 @@ data "template_file" "user_data" {
   manage_etc_hosts: false
 
   timezone: Europe/London
+
+  keyboard:
+    layout: gb
 
   runcmd:
     - 'wget https://enterprise.proxmox.com/debian/proxmox-release-bullseye.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bullseye.gpg'
@@ -174,12 +163,24 @@ data "template_file" "user_data" {
       deb $SECURITY $RELEASE-security main contrib non-free
 
   fqdn: ${local.hostnames[count.index]}
+  
   hostname: ${trim(local.hostnames[count.index], var.domain-name)}
+  
   prefer_fqdn_over_hostname: true
 
-  keyboard:
-    layout: gb
+  disk_setup:
+    /dev/sdb:
+      table_type: mbr
+      layout: true
 
+  fs_setup:
+  - label: data
+    filesystem: btrfs
+    device: /dev/sdb1
+
+  mounts:
+  - ["/dev/sdb1", "/data"]
+  
   users:
   - name: ${data.bitwarden_item_login.admin-root-credentials.username}
     plain_text_passwd: ${data.bitwarden_item_login.admin-root-credentials.password}
@@ -323,11 +324,11 @@ resource "libvirt_domain" "host" {
 
   provisioner "local-exec" {
     working_dir = "./ansible/"
-    command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -vvvv -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -i 172.16.10.${10 + count.index}, -e 'clusteripaddress=172.16.10.${10 + count.index} bw_user=${data.bitwarden_item_login.admin-root-credentials.username}' buildProxmox.yaml"
+    command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -i 172.16.10.${10 + count.index}, -e 'clusteripaddress=172.16.10.${10 + count.index} bw_user=${data.bitwarden_item_login.admin-root-credentials.username}' buildProxmox.yaml"
   }
 
   depends_on = [
-    libvirt_volume.host_root_disk, libvirt_cloudinit_disk.commoninit, libvirt_network.network_cluster
+    libvirt_volume.host_root_disk, libvirt_cloudinit_disk.commoninit, libvirt_network.network_cluster, libvirt_pool.debian10Pool
   ]
 }
 
