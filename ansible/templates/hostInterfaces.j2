@@ -1,5 +1,5 @@
 auto lo
-
+auto ens4
 iface lo inet loopback
 
 iface ens3 inet manual
@@ -11,6 +11,6 @@ iface vmbr0 inet dhcp
     bridge-fd 0
 
 iface ens4 inet static
-    address {{ clusteripaddress }}
-    netmask 255.255.255.0
+    address {{ ansible_ens4.ipv4.address }}
+    netmask {{ ansible_ens4.ipv4.netmask }}
     mtu 9000

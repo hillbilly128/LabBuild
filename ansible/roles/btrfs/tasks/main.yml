@@ -1,0 +1,95 @@
+---
+# tasks file for btrfs
+- name: get BTRFS Filesystem data
+  ansible.builtin.command: btrfs filesystem show
+  register: btrfs_filesystem
+  changed_when: false
+
+- name: print last task result
+  ansible.builtin.debug:
+    var: btrfs_filesystem
+  tags: [debug, never]
+  when: btrfs_filesystem is defined
+
+- name: Get data drive partition info
+  community.general.parted:
+    device: "{{ item }}"
+    unit: GB
+  loop: "{{ drives }}"
+  register: drive_partition
+
+- name: print last task result
+  ansible.builtin.debug:
+    var: drive_partition.results|map(attribute='partitions')|flatten|map(attribute='fstype')|join(' ')|regex_search('(\b(?!btrfs)\w*\b)+') != ''
+  tags: [debug, never]
+  when: drive_partition is defined
+
+#- name: Check BTRFS Profiles are correct
+
+#- name: Check BTRFS Subvolumes are correct
+
+
+- name: print next when result
+  ansible.builtin.debug:
+    var: btrfs_filesystem is search(([".*(",drives|join("|"),").*"]|join))
+  tags: [debug, never]
+
+- name: print next loop result
+  ansible.builtin.debug:
+    var: ansible_facts['mounts']|selectattr("device", "in", drives)
+  tags: [debug, never]
+
+- name: ensure drives are not mounted
+  ansible.posix.mount:
+    state: absent
+    path: item.mount
+  loop: "{{ ansible_facts['mounts']|selectattr(\"device\", \"in\", drives) }}"
+  when: btrfs_filesystem is search(([".*(",drives|join("|"),").*"]|join))
+
+- name: print mkfs.btrfs command
+  ansible.builtin.debug:
+    msg: "mkfs.btrfs -f -d {{ dataprofile }} -m {{ metaprofile }} {{ drives|join(' ') }}"
+  tags: [debug, never]
+
+- name: make BTRFS filesystems on devices
+  ansible.builtin.command: "mkfs.btrfs -f -d {{ dataprofile }} -m {{ metaprofile }} {{ drives|join(' ') }}"
+
+- name: Mount multiple drive btrfs root
+  ansible.posix.mount:
+    state: mounted
+    path: /mnt
+    options: "{{ ['drives='] | product(drives | slice:[1:] | reverse) | map('join') | list | join(',') }},compress={{mountoptions.commpression}},{{'autodefrag' if mountoptions.autodefrag else 'noautodefrag'}}{{',noatime' if mountoptions.noatime else ''}},space_cache={{mountoptions.space_cache}}"
+    src: "{{ drives[0] }}"
+    fstype: btrfs
+  when: drives|count > 1
+  register: mount_result
+
+- name: Mount single drive btrfs root
+  ansible.posix.mount:
+    state: mounted
+    path: /mnt
+    options: "compress={{mountoptions.commpression}},{{'autodefrag' if mountoptions.autodefrag else 'noautodefrag'}}{{',noatime' if mountoptions.noatime else ''}},space_cache={{mountoptions.space_cache}}"
+    src: "{{ drives[0] }}"
+    fstype: btrfs
+  when: drives|count == 1
+  register: mount_result
+
+- name: print mount result
+  ansible.builtin.debug:
+    var: mount_result
+  tags: [debug, never]
+  when: mount_result is defined
+
+# - name: create subvolumes
+#   ansible.builtin.command:
+#     cmd: "btrfs subvolume create /mnt/{{ item.volume-name }}"
+#   with_items: "{{ subvolumes }}"
+
+# - name: create mountpoints
+#   ansible.builtin.file:
+#     path: /mnt/{{ item.mountpoint}}
+#     state: directory
+#   with_items: "{{ subvolumes }}"
+
+# - name: mount subvolumes
+#   ansible.builtin.command: "mount -o subvol={{ item.volume-name }},autodefrag={{ autodefrag }} {{ drives[0] }} /mnt/{{ item.volume-name }}"

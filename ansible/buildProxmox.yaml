@@ -1,170 +1,528 @@
 ---
-- hosts: all
-  become: yes
+- name: Build host environment
+  hosts: 127.0.0.1
+  connection: local
+  tags: build
+  vars_prompt:
+    - name: num_hosts
+      prompt: "Enter the number of hosts"
+      private: false
+  vars_files:
+    - vars/vars.yaml
+  tasks:
+    - block:
+        - name: Build hosts on Libvrt using Terraform
+          cloud.terraform.terraform:
+            project_path: "../terra"
+            state: present
+            force_init: true
+            provider_upgrade: true
+            parallelism: "{{ num_hosts }}"
+            variables:
+              adminUserName: "{{ admin_username }}"
+              adminPassword: "{{ admin_password }}"
+              rootUserName: "{{ root_username }}"
+              rootPassword: "{{ root_password }}"
+              host-quantity: "{{ num_hosts }}"
+          register: build_output
+
+      rescue:
+        - block:
+            - name: Destroy hosts on Libvrt using Terraform
+              cloud.terraform.terraform:
+                project_path: "../terra"
+                state: absent
+                force_init: true
+                parallelism: "{{ num_hosts }}"
+                variables:
+                  adminUserName: "{{ admin_username }}"
+                  adminPassword: "{{ admin_password }}"
+                  rootUserName: "{{ root_username }}"
+                  rootPassword: "{{ root_password }}"
+                  host-quantity: "{{ num_hosts }}"
+              become: false
+              register: destroy_result
+              ignore_errors: true
+
+            - name: Restart libvirtd
+              ansible.builtin.service:
+                name: libvirtd
+                state: restarted
+              become: true
+              become_method: sudo
+              when: destroy_result.stdout.find('')
+
+            - name: Rebuild hosts on Libvrt using Terraform
+              cloud.terraform.terraform:
+                project_path: "../terra"
+                state: present
+                force_init: true
+                parallelism: "{{ num_hosts }}"
+                variables:
+                  adminUserName: "{{ admin_username }}"
+                  adminPassword: "{{ admin_password }}"
+                  rootUserName: "{{ root_username }}"
+                  rootPassword: "{{ root_password }}"
+                  host-quantity: "{{ num_hosts }}"
+    - name: Refresh Inventory
+      meta: refresh_inventory
+
+- name: Configure each host
+  hosts: all
+  remote_user: "{{ admin_username }}"
+  tags: configure
+  become: true
+  gather_facts: false
   vars:
-    rebootServiceName: OneOffReboot
-    rebootServicepath: /usr/local/rebootscript.sh
-    rebootServiceUnitFile: "/etc/systemd/system/{{ rebootServiceName }}.service"
+    reboot_service_name: OneOffReboot
+    reboot_service_path: /usr/local/rebootscript.sh
+    reboot_service_unit_file: "/etc/systemd/system/{{ reboot_service_name }}.service"
+  vars_files:
+    - vars/vars.yaml
 
   tasks:
-  - name: Add Proxmox repository into sources list
-    ansible.builtin.apt_repository:
-      repo: deb http://download.proxmox.com/debian/pve bullseye pve-no-subscription
-      state: present
-  
-  - name: Add Ceph repository into sources list
-    ansible.builtin.apt_repository:
-      repo: deb http://download.proxmox.com/debian/ceph-quincy bullseye main
-      state: present
-  
-  - name: Update System 
-    ansible.builtin.apt:
-      update_cache: true
-      cache_valid_time: 0
-      name: "*"
-      state: latest
+    - name: Confirm host connectivity
+      ansible.builtin.wait_for_connection:
 
-  - name: Install Proxmox-VE
-    ansible.builtin.apt:
-      state: present
-      pkg:
-      - proxmox-ve
-      - ifupdown2
-    
+    - name: Gather facts
+      ansible.builtin.setup:
 
-  - name: Remove OS-prober
-    ansible.builtin.apt:
-      state: absent
-      pkg: 
-      - os-prober
-      - ifupdown
-  
-  - name: copy new interfaces file
-    ansible.builtin.template:
-      src: hostInterfaces.j2
-      dest: /etc/network/interfaces.new
-      mode: 0644
-      owner: root
-      group: root
+    - block:
+        - name: check interfaces file
+          ansible.builtin.template:
+            src: hostInterfaces.j2
+            dest: /etc/network/interfaces
+            mode: 0644
+            owner: root
+            group: root
+          check_mode: true
+          register: interface_file
 
-  - name: copy reboot script
-    ansible.builtin.template:
-      src: rebootHostScript.j2
-      dest: "{{ rebootServicepath }}"
-      mode: 0644
-      owner: root
-      group: root
-  
-  - name: copy reboot unit file
-    ansible.builtin.template:
-      src: rebootHostUnitFile.j2
-      dest: "{{ rebootServiceUnitFile }}"
-      mode: 0644
-      owner: root
-      group: root
+        - name: copy new interfaces file
+          ansible.builtin.template:
+            src: hostInterfaces.j2
+            dest: /etc/network/interfaces.new
+            mode: 0644
+            owner: root
+            group: root
+          when: interface_file.changed
 
-  - name: Enable reboot service
-    ansible.builtin.systemd:
-      daemon_reload: true
-      enabled: true
-      name: "{{ rebootServiceName }}"
-    
-  - name: disable cloud-init configured interfaces to prevent conficts with ifupdown2
-    ansible.builtin.systemd:
-      enabled: false
-      name: "{{ item }}"
-    with_list:
-      - ifup@ens3.service
-      - ifup@ens4.service
-      
-  - name: disable cloud-init
-    ansible.builtin.systemd:
-      enabled: false
-      state: stopped
-      name: "{{ item }}"
-    with_list:
-      - cloud-init.service
-      - cloud-init-local.service
-      - cloud-config.service
-      - cloud-final.service
-      - cloud-init.target
-    
-  - name: Reboot host into proxmox
-    ansible.builtin.reboot:
+        - name: disable cloud-init
+          ansible.builtin.systemd:
+            enabled: false
+            state: stopped
+            name: "{{ item }}"
+          with_list:
+            - cloud-init.service
+            - cloud-init-local.service
+            - cloud-config.service
+            - cloud-final.service
+      notify: rebootHost
 
-  - name: remove reboot script
-    ansible.builtin.file:
-      path: "{{ rebootServicepath }}"
-      state: absent
-    
-  - name: remove reboot unit file
-    ansible.builtin.file:
-      path: "{{ rebootServiceUnitFile }}"
-      state: absent
-  
-  - name: Reload Systemd
-    ansible.builtin.systemd:
-      daemon_reload: true
+    - block:
+        - name: install specific tools
+          ansible.builtin.apt:
+            update_cache: true
+            pkg:
+              - debian-goodies
+              - qemu-guest-agent
+              - python3-pexpect
+              - python3-proxmoxer
+          tags: all
+          throttle: 1
+          register: install_result
+          until: install_result is success
+          retries: 5
+          delay: 60
 
-  - name: Add Proxmox Admin User
-    ansible.builtin.shell:
-      cmd: "{{ item }}"
-    loop:
-      - "pveum user add {{bw_user}}@pam"
-      - "pveum group add AdminGroup -comment 'System Administrators'"
-      - "pveum acl modify / -group AdminGroup -role Administrator"
-      - "pveum user modify {{bw_user}}@pam -group AdminGroup"
-  
-  - name: Install disk tools
-    ansible.builtin.apt:
-      state: present
-      pkg:
-      - parted
-      - btrfs-progs
-  
-  - name: Create data partition
-    community.general.parted:
-      device: /dev/sdb
-      number: 1
-      state: present
-      fs_type: btrfs
-  
-  - name: format data partition
-    community.general.filesystem:
-      dev: /dev/sdb1
-      fstype: btrfs
-      state: present
-  
-  - name: mount partition to data
-    ansible.posix.mount:
-      path: /data
-      src: /dev/sdb1
-      fstype: btrfs
-      state: mounted
-      opts: defaults,compress=zstd
-  
-  - name: Set data drive label
-    ansible.builtin.shell:
-      cmd: btrfs filesystem label /data DataDrive
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: install_result
+          tags: [never, debug]
+          when: install_result is defined
 
-  - name: Create directory structure using btrfs subvolumes
-    ansible.builtin.shell:
-      cmd: "btrfs subvolume create {{ item }}"
-    with_list:
-      - /data/templates
-      - /data/iso
-      - /data/lxc
-      - /data/vhd
-      - /data/snippets
-      - /data/backup
-    
-  - name: Add folders to Proxmox
-    ansible.builtin.shell:
-      cmd: "pvesm add btrfs {{ item.contenttype }} --content {{ item.contenttype }} --path {{ item.path }} --is_mountpoint /data"
-    loop:
-      - { path: '/data/templates',contenttype: 'vztmpl' }
-      - { path: '/data/iso',contenttype: 'iso' }
-      - { path: '/data/lxc',contenttype: 'rootdir' }
-      - { path: '/data/vhd',contenttype: 'images' }
-      - { path: '/data/snippets',contenttype: 'snippets' }
-      - { path: '/data/backup',contenttype: 'backup' }
+        - name: Add Proxmox repository into sources list
+          ansible.builtin.apt_repository:
+            repo: deb http://download.proxmox.com/debian/pve bullseye pve-no-subscription
+            state: present
+          tags: all
+
+        - name: Add Ceph repository into sources list
+          ansible.builtin.apt_repository:
+            repo: deb http://download.proxmox.com/debian/ceph-quincy bullseye main
+            state: present
+          tags: all
+
+        - name: Update System
+          ansible.builtin.apt:
+            update_cache: true
+            cache_valid_time: 0
+            state: latest
+            upgrade: dist
+          tags: all
+          throttle: 1
+          register: update_result
+          until: update_result is success
+          retries: 5
+          delay: 60
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: update_result
+          tags: [never, debug]
+          when: update_result is defined
+
+        - name: Check reboot status
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+            get_checksum: false
+          register: reboot
+          changed_when: reboot.stat.exists
+          notify: reboot machine
+          tags: all
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: reboot
+          tags: [never, debug]
+          when: reboot is defined
+
+      rescue:
+        - name: reconfigure dpkg
+          ansible.builtin.shell:
+            cmd: "dpkg --configure -a"
+          register: dpkg_result
+          changed_when: dpkg_result.rc == 0
+          ignore_errors: true
+          tags: all
+          throttle: 1
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: dpkg_result
+          tags: [never, debug]
+          when: dpkg_result is defined
+
+        - name: ensure the Enterprise repo has been removed
+          ansible.builtin.apt_repository:
+            repo: deb https://enterprise.proxmox.com/debian/pve bullseye pve-enterprise
+            state: absent
+
+        - name: Update System
+          ansible.builtin.apt:
+            update_cache: true
+            cache_valid_time: 0
+            state: latest
+            upgrade: dist
+          tags: all
+          throttle: 1
+
+        - name: Check reboot status
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+            get_checksum: false
+          register: reboot
+          changed_when: reboot.stat.exists
+          tags: all
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: reboot
+          tags: [never, debug]
+          when: reboot is defined
+
+      notify: rebootHost
+
+    - name: Install Proxmox-VE
+      ansible.builtin.apt:
+        state: present
+        pkg:
+          - proxmox-ve
+          - ifupdown2
+      tags: all
+      throttle: 1
+      register: proxmox_install_result
+      until: proxmox_install_result is success
+      retries: 5
+      delay: 60
+      notify: rebootHost
+
+    - name: print result from last tasks
+      ansible.builtin.debug:
+        var: proxmox_install_result
+      tags: [never, debug]
+      when: proxmox_install_result is defined
+
+    - name: Remove OS-prober
+      ansible.builtin.apt:
+        state: absent
+        pkg:
+          - os-prober
+          - ifupdown
+      tags: all
+      notify: rebootHost
+
+    - name: ensure the Enterprise repo has been removed
+      ansible.builtin.apt_repository:
+        repo: deb https://enterprise.proxmox.com/debian/pve bullseye pve-enterprise
+        state: absent
+
+    - name: Notify handlers
+      meta: flush_handlers
+
+    - block:
+        - name: Get Proxmox Users
+          ansible.builtin.command: pveum user list --output-format json
+          register: pve_user_list
+          changed_when: false
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: pve_user_list
+          tags: [never, debug]
+          when: pve_user_list is defined
+
+        - name: Get Promox Group List
+          ansible.builtin.command: pveum group list --output-format json
+          register: pve_group_list
+          changed_when: false
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: pve_group_list
+          tags: [never, debug]
+          when: pve_group_list is defined
+
+        - name: Get Promox ACL List
+          ansible.builtin.command: pveum acl list --output-format json
+          register: pve_acl_list
+          changed_when: false
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: pve_acl_list
+          tags: [never, debug]
+          when: pve_acl_list is defined
+
+        - name: create Proxmox Admin Use
+          ansible.builtin.command: pveum user add {{ proxmox_admin_user }}
+          register: proxmox_add_admin_user
+          changed_when: proxmox_add_admin_user.rc == 0
+          when: pve_user_list.stdout|from_json()|selectattr("userid","match",proxmox_admin_user) is none
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: proxmox_add_admin_user
+          tags: [never, debug]
+          when: proxmox_add_admin_user is defined
+
+        - name: create Proxmox Admin Group
+          ansible.builtin.command: pveum group add AdminGroup -comment 'System Administrators'
+          register: proxmox_add_admin_group
+          changed_when: proxmox_add_admin_group.rc == 0
+          when: pve_group_list.stdout|from_json()|selectattr("groupid","match","AdminGroup") is none
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: proxmox_add_admin_group
+          tags: [never, debug]
+          when: proxmox_add_admin_group is defined
+
+        - name: grant AdminGroup Administrator permissions
+          ansible.builtin.command: pveum acl modify / -group AdminGroup -role Administrator
+          register: proxmox_acl_add_admin
+          changed_when: proxmox_acl_add_admin.rc == 0
+          when: pve_acl_list.stdout|from_json()|selectattr("roleid","match","Administrator")|map(attribute='ugid') is search("AdminGroup")
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: proxmox_acl_add_admin
+          tags: [never, debug]
+          when: proxmox_acl_add_admin is defined
+
+        - name: Add Admin user to admin group
+          ansible.builtin.command: pveum user modify {{ proxmox_admin_user }} --group AdminGroup
+          register: proxmox_user_group_add
+          changed_when: proxmox_user_group_add
+          when: pve_group_list.stdout|from_json()|selectattr("groupid","match","AdminGroup")|map(attribute='users') is search(proxmox_admin_user)
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: proxmox_user_group_add
+          tags: [never, debug]
+          when: proxmox_user_group_add is defined
+
+    - name: Install disk tools
+      ansible.builtin.apt:
+        state: present
+        pkg:
+          - parted
+          - btrfs-progs
+      tags: all
+      throttle: 1
+
+    - name: Set root password
+      ansible.builtin.expect:
+        command: passwd root
+        echo: false
+        responses:
+          password\:\s\Z: "{{ root_password }}"
+
+    - name: Build Data Drive
+      ansible.builtin.import_role:
+        name: btrfs
+      vars:
+        metaprofile: single
+        dataprofile: single
+        mountoptions:
+          autodefrag: true
+          compression: zstd:15
+          noatime: true
+          space_cache: v2
+        drives:
+          - /dev/sdb
+        subvolumes:
+          - volume-name: iso
+            mountpoint: /data/iso
+
+  handlers:
+    - name: copy reboot script
+      ansible.builtin.template:
+        src: rebootHostScript.j2
+        dest: "{{ reboot_service_path }}"
+        mode: 0644
+        owner: root
+        group: root
+      tags: all
+      listen: rebootHost
+
+    - name: copy reboot unit file
+      ansible.builtin.template:
+        src: rebootHostUnitFile.j2
+        dest: "{{ reboot_service_unit_file }}"
+        mode: 0644
+        owner: root
+        group: root
+      tags: all
+      listen: rebootHost
+
+    - name: Enable reboot service
+      ansible.builtin.systemd:
+        daemon_reload: true
+        enabled: true
+        name: "{{ reboot_service_name }}"
+      tags: all
+      listen: rebootHost
+
+    - name: Reboot host into proxmox
+      ansible.builtin.reboot:
+      tags: all
+      listen: rebootHost
+
+    - name: remove reboot script
+      ansible.builtin.file:
+        path: "{{ reboot_service_path }}"
+        state: absent
+      tags: all
+      listen: rebootHost
+
+    - name: remove reboot unit file
+      ansible.builtin.file:
+        path: "{{ reboot_service_unit_file }}"
+        state: absent
+      tags: all
+      listen: rebootHost
+
+    - name: Reload Systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      tags: all
+      listen: rebootHost
+
+- name: Create Cluster on first Host
+  hosts: host1.test.local
+  tags: clusterbuild
+  become: true
+  vars_files:
+    - vars/vars.yaml
+  tasks:
+    - name: Create Cluster
+      ansible.builtin.shell:
+        cmd: pvecm create HOSTCLUSTER
+      register: create_cluster_result
+      changed_when: create_cluster_result.rc == 0
+
+    - name: print result from last tasks
+      ansible.builtin.debug:
+        var: create_cluster_result
+      tags: [never, debug]
+      when: command_result is defined
+
+    - name: wait for Quorate
+      ansible.builtin.shell:
+        cmd: "pvecm status | grep Flags | sed 's/Flags: *//'"
+      register: command_result
+      until: command_result.stdout.find("Quorate ")
+      when: true
+      retries: 10
+      delay: 5
+
+    - name: print result from last tasks
+      ansible.builtin.debug:
+        var: command_result
+      tags: [never, debug]
+      when: command_result is defined
+
+- name: Add remaining hosts to cluster
+  hosts: all:!host1.test.local
+  tags: clusterjoin
+  become: true
+  tasks:
+    - block:
+        - name: Add host to Cluster
+          ansible.builtin.expect:
+            command: pvecm add 172.16.10.10
+            echo: true
+            responses:
+              \APlease enter superuser \(root\) password for \W\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}.\W:"{{ proxmox_passwd }}"
+              Are you sure you want to continue connecting \(yes/no\)\?:"yes"
+          register: command_result
+          failed_when: "'Cluster join aborted!' in command_result.stdout"
+          throttle: 1
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: command_result
+          tags: [never, debug]
+          when: command_result is defined
+
+      rescue:
+        - name: Cleanup cluster data
+          ansible.builtin.shell:
+            cmd: "{{ item }}"
+          loop:
+            - systemctl stop pve-cluster
+            - systemctl stop corosync
+            - pmxcfs -l
+            - rm /etc/pve/corosync.conf
+            - rm -r /etc/corosync/*
+            - killall pmxcfs
+            - systemctl start pve-cluster
+          ignore_errors: true
+          register: cleanup_result
+          changed_when: cleanup_result[*].rc == 0
+
+        - name: print result from last tasks
+          ansible.builtin.debug:
+            var: cleanup_result
+          tags: [never, debug]
+          when: command_result is defined
+
+        - name: Add host to Cluster again
+          ansible.builtin.expect:
+            command: pvecm add 172.16.10.10
+            echo: true
+            responses:
+              \APlease enter superuser \(root\) password for \W\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}.\W:"{{ proxmox_passwd }}"
+              Are you sure you want to continue connecting \(yes/no\)\?:"yes"
+          throttle: 1
