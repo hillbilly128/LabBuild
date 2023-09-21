@@ -3,7 +3,7 @@ Description=Reboot message systemd service.
 
 [Service]
 Type=simple
-ExecStart=/bin/bash {{ rebootServicepath }}
+ExecStart=/bin/bash {{ reboot_service_path }}
 
 [Install]
 WantedBy=multi-user.target

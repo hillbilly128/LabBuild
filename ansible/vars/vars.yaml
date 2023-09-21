@@ -1,0 +1,6 @@
+---
+admin_username: "{{ lookup('community.general.bitwarden', 'Admin Root Credentials', field='username' )[0] }}"
+admin_password: "{{ lookup('community.general.bitwarden', 'Admin Root Credentials', field='password' )[0] }}"
+root_username: "{{ lookup('community.general.bitwarden', 'proxmox root credentials', field='username' )[0] }}"
+root_password: "{{ lookup('community.general.bitwarden', 'proxmox root credentials', field='password' )[0] }}"
+proxmox_admin_user: "{{ admin_username }}@pam"

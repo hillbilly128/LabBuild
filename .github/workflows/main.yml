@@ -1,0 +1,32 @@
+name: Build LibVirt Hosts
+on: 
+  push:
+    branches:
+      - master
+    paths:
+      - *.tf
+      - *.yaml
+      - *.j2
+      - *.cfg
+      - *.plan
+jobs:
+  connect-tailscale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect Tailscale
+        # You may pin to the exact commit or the version.
+        # uses: tailscale/github-action@4e4c49acaa9818630ce0bd7a564372c17e33fb4d
+        uses: tailscale/github-action@v2
+        with:
+          # Your Tailscale OAuth Client ID.
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENTID }}
+          # Your Tailscale OAuth Client Secret.
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          # Comma separated list of Tags to be applied to nodes. The OAuth client must have permission to apply these tags.
+          tags: tag:devops
+          # Optional additional arguments to `tailscale up`
+          #args: # optional, default is 
+          # Optional additional arguments to `tailscaled`
+          #tailscaled-args: # optional, default is 
+          # Fixed hostname to use.
+          hostname: github-runner

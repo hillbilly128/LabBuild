@@ -1,0 +1,2 @@
+"ansible_ssh_private_key_file": "/home/craig/build-lab/.ssh/dev_rsa"
+"ansible_user": "admin"
