@@ -3,21 +3,15 @@
   # uses: tailscale/github-action@4e4c49acaa9818630ce0bd7a564372c17e33fb4d
   uses: tailscale/github-action@v2
   with:
-    # Your Tailscale authentication key, from the admin panel.
-    authkey: # optional
     # Your Tailscale OAuth Client ID.
-    oauth-client-id: # optional
+    oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENTID }}
     # Your Tailscale OAuth Client Secret.
-    oauth-secret: # optional
+    oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
     # Comma separated list of Tags to be applied to nodes. The OAuth client must have permission to apply these tags.
-    tags: # optional
-    # Tailscale version to use.
-    version: # default is 1.42.0
-    # Expected SHA256 checksum of the tarball.
-    sha256sum: # optional, default is 
+    tags: tag:devops
     # Optional additional arguments to `tailscale up`
-    args: # optional, default is 
+    #args: # optional, default is 
     # Optional additional arguments to `tailscaled`
-    tailscaled-args: # optional, default is 
+    #tailscaled-args: # optional, default is 
     # Fixed hostname to use.
-    hostname: # optional, default is 
+    hostname: github-runner
