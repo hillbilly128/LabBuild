@@ -6,5 +6,5 @@
 *.log*
 *.sh
 *.plan
-.*
 log
+.ansible/tmp
