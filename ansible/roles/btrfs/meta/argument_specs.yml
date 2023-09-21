@@ -1,0 +1,103 @@
+# roles/btrfs/meta/arguement_specs.yml
+---
+argument_specs:
+  main:
+    short_description: Create BTRFS subvolumes
+    author: Craig Hillbeck
+    description: Create BTRFS Subvolumes
+    options:
+      metaprofile:
+        description: Specify the profile for the data block groups. Valid values are raid0, raid1, raid1c3, raid1c4, raid5, raid6, raid10 or single or dup
+        type: str
+        choices:
+          - raid0
+          - raid1
+          - raid1c3
+          - raid1c4
+          - raid5
+          - raid6
+          - raid10
+          - single
+          - dup
+        default: single
+      dataprofile:
+        description: Specify the profile for the data block groups. Valid values are raid0, raid1, raid1c3, raid1c4, raid5, raid6, raid10 or single or dup
+        type: str
+        choices:
+          - raid0
+          - raid1
+          - raid1c3
+          - raid1c4
+          - raid5
+          - raid6
+          - raid10
+          - single
+          - dup
+        default: single
+      mountoptions:
+        description: "Mount Options for all BTRFS subvolume mounts"
+        type: dict
+        options:
+          autodefrag:
+            type: bool
+            default: false
+            description: "Enable automatic file defragmentation."
+          compression:
+            type: str
+            description: "Control BTRFS file data compression. Type may be specified as zlib, lzo, zstd or no (for no compression, used for remounting)."
+            choices:
+              - 'no'
+              - 'zlib'
+              - 'lzo'
+              - 'zstd'
+              - 'zlib:1'
+              - 'zlib:2'
+              - 'zlib:3'
+              - 'zlib:4'
+              - 'zlib:5'
+              - 'zlib:6'
+              - 'zlib:7'
+              - 'zlib:8'
+              - 'zlib:9'
+              - 'zstd:1'
+              - 'zstd:2'
+              - 'zstd:3'
+              - 'zstd:4'
+              - 'zstd:5'
+              - 'zstd:6'
+              - 'zstd:7'
+              - 'zstd:8'
+              - 'zstd:9'
+              - 'zstd:10'
+              - 'zstd:11'
+              - 'zstd:12'
+              - 'zstd:13'
+              - 'zstd:14'
+              - 'zstd:15'
+          noatime:
+            type: bool
+            default: true
+          space_cache:
+            type: str
+            choices:
+              - v1
+              - v2
+            default: v2
+      drives:
+        type: "list"
+        required: true
+        description: "Drives to be used in the BTRFS Pool"
+      subvolumes:
+        type: "list"
+        required: true
+        description: "Subvolumes to create and mount points"
+        elements: dict
+        options:
+          volume-name:
+            type: str
+            required: true
+            description: "The Subvolume name"
+          mountpoint:
+            type: str
+            required: true
+            description: "The mount point for the subvolume"

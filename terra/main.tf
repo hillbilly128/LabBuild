@@ -4,10 +4,6 @@ terraform {
       source  = "dmacvicar/libvirt"
       version = "0.7.1"
     }
-    bitwarden = {
-      source  = "maxlaverse/bitwarden"
-      version = ">= 0.5.0"
-    }
     random = {
       source  = "hashicorp/random"
       version = "3.4.3"
@@ -27,14 +23,6 @@ terraform {
   }
 }
 
-provider "bitwarden" {
-  master_password = var.bw_password
-  client_id       = var.bw_client_id
-  client_secret   = var.bw_client_secret
-  email           = "craig.hillbeck@gmail.com"
-  server          = "https://vault.bitwarden.com"
-}
-
 provider "libvirt" {
   uri = "qemu:///system"
 }
@@ -45,28 +33,9 @@ resource "tls_private_key" "dev_key" {
 }
 
 resource "local_sensitive_file" "ssh-private-key" {
-  filename        = "${abspath(path.root)}/.ssh/dev_rsa"
+  filename        = abspath(join("",[abspath(path.root),"/../.ssh/dev_rsa"]))
   file_permission = 0400
   content         = tls_private_key.dev_key.private_key_openssh
-}
-
-data "bitwarden_item_login" "proxmox-host-credentials" {
-  id = "b0243597-acea-4f1f-8827-afa301543ae8"
-}
-
-data "bitwarden_item_login" "admin-root-credentials" {
-  id = "7523cbb5-6184-46df-9069-afa301546588"
-}
-
-variable "host-quantity" {
-  type        = number
-  description = "Number of hosts required"
-}
-
-variable "domain-name" {
-  type        = string
-  description = "Domain Name for the Hosts"
-  default     = "test.local"
 }
 
 resource "random_integer" "rng" {
@@ -88,7 +57,7 @@ locals {
 }
 
 resource "local_file" "variables" {
-  content  = "host-quantity = ${var.host-quantity}\ndomain-name = \"${var.domain-name}\""
+  content  = "host-quantity = ${var.host-quantity}\ndomain-name = \"${var.domain-name}\"\nadminUserName = \"${var.adminUserName}\"\nadminPassword = \"${var.adminPassword}\"\nrootUserName = \"${var.rootUserName}\"\nrootPassword = \"${var.rootPassword}\""
   filename = "${path.module}/build.auto.tfvars"
 }
 
@@ -96,7 +65,13 @@ resource "local_file" "variables" {
 resource "libvirt_pool" "debian10Pool" {
   name = "debian10-pool"
   type = "dir"
-  path = "/mnt/store/Library/DiskImage/templates/"
+  path = "/mnt/store/VMs/debian10pool"
+
+  lifecycle {
+    ignore_changes = [
+      path
+    ]
+  }
 }
 
 #Build a blank thin provisioned HDD 
@@ -105,6 +80,16 @@ resource "libvirt_volume" "data" {
   name  = "Host-data-${count.index}.qcow2"
   pool  = libvirt_pool.debian10Pool.name
   size  = 536870912000
+
+  depends_on = [
+    libvirt_pool.debian10Pool
+  ]
+
+  lifecycle {
+    replace_triggered_by = [
+      libvirt_pool.debian10Pool
+    ]
+  }
 }
 
 #Fetch the current Debian 10 cloud init image
@@ -113,6 +98,16 @@ resource "libvirt_volume" "debian10image" {
   pool   = libvirt_pool.debian10Pool.name
   source = "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.qcow2"
   format = "qcow2"
+
+  depends_on = [
+    libvirt_pool.debian10Pool
+  ]
+
+  lifecycle {
+    replace_triggered_by = [
+      libvirt_pool.debian10Pool
+    ]
+  }
 }
 
 #Clone the Debian 11 image for each host
@@ -122,6 +117,17 @@ resource "libvirt_volume" "host_root_disk" {
   pool           = libvirt_pool.debian10Pool.name
   base_volume_id = libvirt_volume.debian10image.id
   size           = 12884901888
+
+  depends_on = [
+    libvirt_pool.debian10Pool,
+    libvirt_volume.debian10image
+  ]
+
+  lifecycle {
+    replace_triggered_by = [
+      libvirt_pool.debian10Pool
+    ]
+  }
 }
 
 #Meta data for each host
@@ -182,18 +188,14 @@ data "template_file" "user_data" {
   - ["/dev/sdb1", "/data"]
   
   users:
-  - name: ${data.bitwarden_item_login.admin-root-credentials.username}
-    plain_text_passwd: ${data.bitwarden_item_login.admin-root-credentials.password}
+  - name: ${var.adminUserName}
+    plain_text_passwd: ${var.adminPassword}
     shell: /bin/bash
     lock_passwd: false
     ssh_authorized_keys: 
     - ${trimspace(tls_private_key.dev_key.public_key_openssh)}
     sudo: ALL=(ALL) NOPASSWD:ALL
   EOL
-
-  depends_on = [
-    data.bitwarden_item_login.admin-root-credentials
-  ]
 }
 
 #Network file for each host
@@ -231,22 +233,35 @@ resource "libvirt_cloudinit_disk" "commoninit" {
   pool           = libvirt_pool.debian10Pool.name
 
   depends_on = [
-    data.template_file.meta_data, data.template_file.user_data, data.template_file.network_config
+    data.template_file.meta_data, data.template_file.user_data, data.template_file.network_config, libvirt_pool.debian10Pool
   ]
+
+  lifecycle {
+    replace_triggered_by = [
+      libvirt_pool.debian10Pool
+    ]
+  }
 }
 
 # Create the machine
 resource "libvirt_domain" "host" {
   count    = var.host-quantity
   name     = local.hostnames[count.index]
-  memory   = "2048"
-  vcpu     = 2
+  memory   = "3072"
+  vcpu     = 1
   emulator = "/usr/bin/qemu-system-x86_64"
   machine  = "pc-i440fx-6.2"
   arch     = "x86_64"
+  
+  #qemu_agent = true
+
+  # console {
+  #   type = "virtio"
+  #   target_port = "org.qemu.guest_agent.0"
+  # }
 
   cpu {
-    mode = "host-model"
+    mode = "host-passthrough"
   }
 
   cloudinit = libvirt_cloudinit_disk.commoninit[count.index].id
@@ -275,6 +290,8 @@ resource "libvirt_domain" "host" {
     target_port = "0"
     target_type = "serial"
   }
+
+
 
   console {
     type        = "pty"
@@ -310,7 +327,7 @@ resource "libvirt_domain" "host" {
   connection {
     type        = "ssh"
     host        = "172.16.10.${10 + count.index}"
-    user        = data.bitwarden_item_login.admin-root-credentials.username
+    user        = var.adminUserName
     private_key = tls_private_key.dev_key.private_key_openssh
     timeout     = "2m"
     agent       = false
@@ -321,24 +338,54 @@ resource "libvirt_domain" "host" {
       "echo 172.16.10.${10 + count.index}\t${local.hostnames[count.index]}\t${trim(local.hostnames[count.index], var.domain-name)} | sudo tee -a /etc/hosts"
     ]
   }
-
-  provisioner "local-exec" {
-    working_dir = "./ansible/"
-    command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -i 172.16.10.${10 + count.index}, -e 'clusteripaddress=172.16.10.${10 + count.index} bw_user=${data.bitwarden_item_login.admin-root-credentials.username}' buildProxmox.yaml"
-  }
-
+  
   depends_on = [
-    libvirt_volume.host_root_disk, libvirt_cloudinit_disk.commoninit, libvirt_network.network_cluster, libvirt_pool.debian10Pool
+    libvirt_pool.debian10Pool,libvirt_network.network_cluster
   ]
 }
+
+data "template_file" "ansible_inventory" {
+  template = file("${path.module}/templates/inventory.cfg")
+  vars = {
+    hostmachines = "${join("\n", local.hostnames)}"
+  }
+}
+
+// Resources to build the ansible inventory prior to running the playbooks
+resource "local_file" "ansible_inventory" {
+  content  = data.template_file.ansible_inventory.rendered
+  filename = "${abspath(path.root)}/../ansible/inventory/01-hosts"
+}
+resource "local_file" "ansible_inventory_host_vars" {
+  count    = var.host-quantity
+  content  = yamlencode({ ansible_host : element(element(libvirt_domain.host, count.index).network_interface.1.addresses, 0) })
+  filename = "${abspath(path.root)}/../ansible/inventory/host_vars/${local.hostnames[count.index]}.yml"
+}
+
+resource "local_file" "ansible_inventory_all_host_vars" {
+  content = yamlencode({ ansible_user: var.adminUserName, ansible_ssh_private_key_file: local_sensitive_file.ssh-private-key.filename})
+  filename = "${abspath(path.root)}/../ansible/inventory/group_vars/all.yml"
+}
+
+# resource "null_resource" "Proxmox_provisoner" {
+#   provisioner "local-exec" {
+#     working_dir = "./ansible/"
+#     command     = "ANSIBLE_HOST_KEY_CHECKING=FALSE ansible-playbook -vvvv -u ${data.bitwarden_item_login.admin-root-credentials.username} --key-file ${local_sensitive_file.ssh-private-key.filename} -e 'bw_user=${data.bitwarden_item_login.admin-root-credentials.username} bw_pass=${data.bitwarden_item_login.admin-root-credentials.password} proxmox_passwd=${data.bitwarden_item_login.proxmox-host-credentials.password}' buildProxmox.yaml"
+#   }
+
+#   depends_on = [
+#     local_file.ansible_inventory, local_file.ansible_inventory_host_vars, libvirt_domain.host
+#   ]
+# }
 
 #null-resource hack to clean up known hosts file on destroy
 resource "null_resource" "known_hosts" {
   count = var.host-quantity
   provisioner "local-exec" {
     when       = destroy
-    command    = "ssh-keygen -f ~/.ssh/known_hosts -R 172.16.10.${10 + count.index}"
+    command    = "ssh-keygen -f /home/craig/.ssh/known_hosts -R 172.16.10.${10 + count.index}"
     on_failure = continue
+    
   }
 }
 

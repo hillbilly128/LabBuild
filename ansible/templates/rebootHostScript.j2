@@ -6,7 +6,7 @@ ipaddress=$(ip a show dev ens4 | grep -oP 'inet \K[^ ]+')
 
 if [ $ipaddress ];
 then
-    systemctl disable {{ rebootServiceName }}
+    systemctl disable {{ reboot_service_name }}
 else
     reboot now
 fi
