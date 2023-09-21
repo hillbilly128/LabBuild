@@ -7,3 +7,4 @@
 *.sh
 *.plan
 log
+.ansible/tmp

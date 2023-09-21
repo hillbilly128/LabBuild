@@ -1,0 +1,13 @@
+{
+    "yaml.schemas": {
+        "https://raw.githubusercontent.com/ansible/ansible-lint/main/src/ansiblelint/schemas/ansible.json#/$defs/playbook": "file:///home/craig/build-lab/ansible/buildProxmox.yaml",
+        "https://raw.githubusercontent.com/ansible/ansible-lint/main/src/ansiblelint/schemas/role-arg-spec.json": [
+            "file:///home/craig/build-lab/ansible/roles/btrfs/meta/argument_specs.yml"
+        ],
+        "https://raw.githubusercontent.com/ansible/ansible-lint/main/src/ansiblelint/schemas/ansible.json#/$defs/tasks": "file:///home/craig/build-lab/ansible/roles/btrfs/tasks/main.yml"
+    },
+    "json.schemas": [
+
+    ],
+    "ansible.python.interpreterPath": "/bin/python3"
+}
