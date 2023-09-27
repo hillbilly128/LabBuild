@@ -4,11 +4,11 @@ on:
     branches:
       - master
     paths:
-      - *.tf
-      - *.yaml
-      - *.j2
-      - *.cfg
-      - *.plan
+      - '*.tf'
+      - '*.yaml'
+      - '*.j2'
+      - '*.cfg'
+      - '*.plan'
 jobs:
   connect-tailscale:
     runs-on: ubuntu-latest
