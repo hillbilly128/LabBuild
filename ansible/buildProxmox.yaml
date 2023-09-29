@@ -1,4 +1,27 @@
 ---
+- name: Setup build environment
+  hosts: localhost
+  connection: local
+  tags: environment
+  vars_prompt:
+    - name: vault_password
+      prompt: What is your vault password
+      private: true
+  tasks:
+    - name: Create SSH keys
+      community.crypto.openssh_keypair:
+        path: ../.ssh/dev_rsa
+    - name: Create Vault password file
+      ansible.builtin.file:
+        path: ../.working.txt
+        state: touch
+        mode: 600
+      register: vaultFile
+    - name: set password
+      ansible.builtin.copy:
+        content: vault_password
+        dest: vaultFile.dest
+
 - name: Build host environment
   hosts: 127.0.0.1
   connection: local
