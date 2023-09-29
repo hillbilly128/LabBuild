@@ -1,1 +1,0 @@
-This is the vault password for my ansible vault
