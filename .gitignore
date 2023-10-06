@@ -38,6 +38,8 @@ override.tf.json
 log
 .ansible/tmp
 
+.vscode
+
 **/.working.txt/*
 
 # Ignore CLI configuration files
