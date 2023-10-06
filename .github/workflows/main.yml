@@ -32,4 +32,4 @@ jobs:
           hostname: github-runner
       - name: Connect to laptop and start build
         run: |
-          ssh craig@100.67.95.116 "mkdir -p ~/running/build; git clone https://github.com/hillbilly128/LabBuild.git ~/running/build; cd ~/running/build/; ansible-playbook ~/running/build/ansible/buildProxmox.yaml"
+          ssh craig@100.67.95.116 "mkdir -p ~/running/build; git clone https://github.com/hillbilly128/LabBuild.git ~/running/build; cd ~/running/build/; ansible-playbook --extra-vars 'vault_password=${{ secrets.VAULT_PASSWORD }}' ~/running/build/ansible/buildProxmox.yaml"
