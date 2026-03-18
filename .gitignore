@@ -38,7 +38,7 @@ override.tf.json
 log
 .ansible/tmp
 
-.vscode
+.vscode/
 
 **/.working.txt/*
 
